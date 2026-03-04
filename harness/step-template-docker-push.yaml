@@ -1,0 +1,17 @@
+# Harness Step Template: Docker Build & Push
+# Bonus exercise: templatized step referenced in the main pipeline
+template:
+  name: Docker Build and Push
+  identifier: Docker_Build_and_Push
+  versionLabel: "1.0"
+  type: Step
+  spec:
+    type: BuildAndPushDockerRegistry
+    spec:
+      connectorRef: <+input>
+      repo: <+input>
+      tags:
+        - <+input>
+      dockerfile: Dockerfile
+      context: .
+      caching: true

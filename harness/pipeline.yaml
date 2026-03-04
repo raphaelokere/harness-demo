@@ -1,0 +1,175 @@
+pipeline:
+  name: Harness Demo CI/CD Pipeline
+  identifier: Harness_Demo_CICD_Pipeline
+  projectIdentifier: harness_demo
+  orgIdentifier: default
+  description: "Enterprise SE Lab: CI build/test/push + CD Kubernetes canary deploy"
+  tags:
+    lab: "enterprise-se"
+
+  stages:
+
+    # ─────────────────────────────────────────────
+    # STAGE 1: Continuous Integration
+    # ─────────────────────────────────────────────
+    - stage:
+        name: Build and Test
+        identifier: Build_and_Test
+        type: CI
+        spec:
+          cloneCodebase: true
+          infrastructure:
+            type: KubernetesDirect
+            spec:
+              connectorRef: k8s_delegate_connector
+              namespace: harness-builds
+              automountServiceAccountToken: true
+              nodeSelector: {}
+              os: Linux
+
+          execution:
+            steps:
+
+              # Step 1: Compile & run unit tests (templatized as a Run step)
+              - step:
+                  name: Maven Build and Test
+                  identifier: Maven_Build_and_Test
+                  template:
+                    templateRef: Maven_Test_Step
+                    versionLabel: "1.0"
+
+              # Step 2: Build & push Docker image (uses templatized step - bonus)
+              - step:
+                  name: Build and Push to DockerHub
+                  identifier: Build_and_Push_DockerHub
+                  template:
+                    templateRef: Docker_Build_and_Push
+                    versionLabel: "1.0"
+                    templateInputs:
+                      type: BuildAndPushDockerRegistry
+                      spec:
+                        connectorRef: dockerhub_connector
+                        repo: <+pipeline.variables.dockerhub_username>/harness-demo
+                        tags:
+                          - <+pipeline.sequenceId>
+                          - latest
+
+        variables: []
+
+    # ─────────────────────────────────────────────
+    # STAGE 2: Continuous Deployment – Canary
+    # ─────────────────────────────────────────────
+    - stage:
+        name: Deploy to Kubernetes
+        identifier: Deploy_to_Kubernetes
+        type: Deployment
+        spec:
+          deploymentType: Kubernetes
+          service:
+            serviceRef: harness_demo_service
+            serviceInputs:
+              serviceDefinition:
+                type: Kubernetes
+                spec:
+                  artifacts:
+                    primary:
+                      primaryArtifactRef: harness_demo_image
+                      sources:
+                        - identifier: harness_demo_image
+                          spec:
+                            connectorRef: dockerhub_connector
+                            imagePath: <+pipeline.variables.dockerhub_username>/harness-demo
+                            tag: <+pipeline.sequenceId>
+                          type: DockerRegistry
+
+          environment:
+            environmentRef: production
+            deployToAll: false
+            infrastructureDefinitions:
+              - identifier: k8s_prod_infra
+
+          execution:
+            steps:
+
+              # Canary phase: deploy 25% traffic
+              - stepGroup:
+                  name: Canary Deployment
+                  identifier: Canary_Deployment
+                  steps:
+                    - step:
+                        name: Canary Deploy
+                        identifier: Canary_Deploy
+                        type: K8sCanaryDeploy
+                        timeout: 10m
+                        spec:
+                          instanceSelection:
+                            type: Percentage
+                            spec:
+                              percentage: 25
+                          skipDryRun: false
+
+                    - step:
+                        name: Canary Verification
+                        identifier: Canary_Verification
+                        type: HarnessApproval
+                        timeout: 1d
+                        spec:
+                          approvalMessage: |-
+                            Canary deployment (25%) is live.
+                            Review metrics and approve to promote to full rollout.
+                          includePipelineExecutionHistory: true
+                          approvers:
+                            minimumCount: 1
+                            disallowPipelineExecutor: false
+                            userGroups:
+                              - account._all_users
+
+              # Primary phase: full rollout
+              - stepGroup:
+                  name: Primary Rollout
+                  identifier: Primary_Rollout
+                  steps:
+                    - step:
+                        name: Canary Delete
+                        identifier: Canary_Delete
+                        type: K8sCanaryDelete
+                        timeout: 10m
+                        spec: {}
+
+                    - step:
+                        name: Rolling Deploy
+                        identifier: Rolling_Deploy
+                        type: K8sRollingDeploy
+                        timeout: 10m
+                        spec:
+                          skipDryRun: false
+
+            rollbackSteps:
+              - step:
+                  name: Canary Delete Rollback
+                  identifier: Canary_Delete_Rollback
+                  type: K8sCanaryDelete
+                  timeout: 10m
+                  spec: {}
+              - step:
+                  name: Rolling Rollback
+                  identifier: Rolling_Rollback
+                  type: K8sRollingRollback
+                  timeout: 10m
+                  spec: {}
+
+        tags: {}
+        failureStrategies:
+          - onFailure:
+              errors:
+                - AllErrors
+              action:
+                type: StageRollback
+
+  # Pipeline-level variables
+  variables:
+    - name: dockerhub_username
+      type: String
+      description: "DockerHub username"
+      required: true
+      value: <+input>

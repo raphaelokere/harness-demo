@@ -1,0 +1,23 @@
+# Harness Step Template: Maven Build and Test
+# Templatized for reuse across pipelines (Bonus exercise)
+template:
+  name: Maven Test Step
+  identifier: Maven_Test_Step
+  versionLabel: "1.0"
+  type: Step
+  spec:
+    type: Run
+    spec:
+      connectorRef: dockerhub_connector
+      image: maven:3.9.6-eclipse-temurin-17
+      shell: Sh
+      command: |-
+        echo "=== Building and Testing Harness Demo App ==="
+        cd app
+        mvn clean verify --no-transfer-progress
+        echo "=== Build & Tests Passed ==="
+      reports:
+        type: JUnit
+        spec:
+          paths:
+            - "app/target/surefire-reports/**/*.xml"
