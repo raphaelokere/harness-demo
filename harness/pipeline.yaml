@@ -51,7 +51,6 @@ pipeline:
                         connectorRef: dockerhub_connector
                         repo: <+pipeline.variables.dockerhub_username>/harness-demo
                         tags:
-                          - <+pipeline.sequenceId>
                           - latest
 
         variables: []
