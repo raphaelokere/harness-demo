@@ -6,6 +6,15 @@ pipeline:
   description: "Enterprise SE Lab: CI build/test/push + CD Kubernetes canary deploy"
   tags:
     lab: "enterprise-se"
+  properties:
+    ci:
+      codebase:
+        connectorRef: github_connector
+        repoName: harness-demo
+        build:
+          type: branch
+          spec:
+            branch: main
 
   stages:
 
