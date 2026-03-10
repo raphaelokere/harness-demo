@@ -8,25 +8,29 @@ This repo contains all artifacts for the Harness Enterprise SE Candidate Lab, de
 - **CD**: Deploy to Kubernetes using a **Canary release strategy**
 - **Bonus**: Reusable step templates (templatization)
 
+The application is a minimal Spring Boot REST API with two endpoints:
+- `GET /` — returns `{ "message": "Hello from Harness Demo App!", "version": "stable" }`
+- `GET /health` — Kubernetes liveness/readiness probe
+
 ---
 
 ## Project Structure
 
 ```
-harness/
-├── app/                        # Java Spring Boot application
-│   ├── src/main/...            # Application source
-│   ├── src/test/...            # JUnit tests
-│   ├── Dockerfile              # Multi-stage Docker build
-│   └── pom.xml                 # Maven build descriptor
-├── k8s/                        # Kubernetes manifests
+harness-demo/
+├── app/                                  # Java Spring Boot application
+│   ├── src/main/...                      # Application source
+│   ├── src/test/...                      # JUnit tests
+│   ├── Dockerfile                        # Multi-stage Docker build
+│   └── pom.xml                           # Maven build descriptor
+├── k8s/                                  # Kubernetes manifests
 │   ├── namespace.yaml
-│   ├── deployment.yaml         # Stable deployment (uses Harness artifact expression)
-│   └── service.yaml
-└── harness/                    # Harness pipeline configs (importable)
-    ├── pipeline.yaml           # Full CI + CD pipeline
-    ├── maven-step-template.yaml   # Reusable Maven build/test step
-    └── step-template-docker-push.yaml  # Reusable Docker build+push step
+│   ├── deployment.yaml                   # App deployment (2 replicas)
+│   └── service.yaml                      # ClusterIP service
+└── harness/                              # Harness pipeline configs
+    ├── pipeline.yaml                     # Full CI + CD pipeline
+    ├── maven-step-template.yaml          # Reusable Maven build/test step
+    └── step-template-docker-push.yaml    # Reusable Docker build+push step
 ```
 
 ---
@@ -35,23 +39,22 @@ harness/
 
 | Tool | Version | Notes |
 |------|---------|-------|
-| Docker | 24+ | Must be running |
+| Docker Desktop | 24+ | Must be running |
 | minikube | v1.38+ | `brew install minikube` |
-| kubectl | v1.32+ | Included with Docker Desktop |
-| Java | 17 | For local dev only |
-| Maven | 3.9+ | For local dev only |
+| kubectl | v1.35+ | `brew install kubectl` |
+| helm | v4+ | `brew install helm` |
 
 ---
 
 ## Step 1: Kubernetes Cluster Setup
 
 ```bash
-# Start minikube
-minikube start --cpus=4 --memory=8192
+# Start minikube with enough resources for Maven builds
+minikube start --driver=docker --memory=4096 --cpus=2
 
-# Verify cluster
-kubectl get nodes
-kubectl cluster-info
+# Create required namespaces
+kubectl create namespace harness-builds
+kubectl create namespace harness-demo
 ```
 
 ---
@@ -59,112 +62,115 @@ kubectl cluster-info
 ## Step 2: Harness Trial & Delegate Install
 
 1. Sign up at https://app.harness.io/auth/#/signup
-2. After login, navigate to **Account Settings → Delegates**
-3. Click **+ New Delegate** → select **Kubernetes**
-4. Download the generated `harness-delegate.yml`
-5. Apply it to your cluster:
+2. Install the delegate into minikube via Helm:
 
 ```bash
-kubectl apply -f harness-delegate.yml
-kubectl get pods -n harness-delegate   # wait for Running status
+helm repo add harness-delegate https://app.harness.io/storage/harness-download/delegate-helm-chart/
+helm repo update harness-delegate
+
+helm upgrade -i helm-delegate --namespace harness-delegate-ng --create-namespace \
+  harness-delegate/harness-delegate-ng \
+  --set delegateName=helm-delegate \
+  --set accountId=<YOUR_ACCOUNT_ID> \
+  --set delegateToken=<YOUR_DELEGATE_TOKEN> \
+  --set managerEndpoint=https://app.harness.io \
+  --set delegateDockerImage=harness/delegate:26.02.88600 \
+  --set replicas=1 --set upgrader.enabled=true
 ```
 
-> **Tip:** The delegate must show **Connected** in the Harness UI before proceeding.
+3. Verify the delegate is running and shows **Connected** in Harness:
+
+```bash
+kubectl get pods -n harness-delegate-ng
+```
 
 ---
 
-## Step 3: Harness CI Pipeline
+## Step 3: Connectors
 
-### Connectors to create first (Account Settings → Connectors)
+Create the following connectors in Harness (**Project Settings → Connectors**):
 
-| Connector | Type | Details |
-|-----------|------|---------|
+| Identifier | Type | Details |
+|---|---|---|
+| `github_connector` | GitHub | Account URL type — `https://github.com/<your-username>` |
 | `dockerhub_connector` | Docker Registry | hub.docker.com + your credentials |
-| `github_connector` | GitHub | This repo, with OAuth or PAT |
-| `k8s_delegate_connector` | Kubernetes | Use the delegate selector |
-
-### Pipeline Setup
-
-1. Go to **Pipelines → + Create Pipeline** → import from YAML
-2. Paste contents of `harness/pipeline.yaml`
-3. Set the `dockerhub_username` variable to your DockerHub username
-
-### What the CI stage does
-
-```
-Clone Repo → Maven Build & Test (JUnit reports) → Docker Build & Push to DockerHub
-```
-
-The **Maven Test Step** and **Docker Build & Push** are both **templatized steps** (bonus).
+| `k8s_connector` | Kubernetes | Use delegate selector `helm-delegate`, `InheritFromDelegate` |
 
 ---
 
-## Step 4: Harness CD – Canary Deployment
+## Step 4: Templates
 
-### Service setup
+Create both step templates before importing the pipeline (**Project → Templates → + New Template → Step**):
 
-- **Deployment type**: Kubernetes
-- **Manifest source**: Git → `k8s/` folder in this repo
-- **Artifact**: DockerHub → `<your-username>/harness-demo:<pipeline.sequenceId>`
+| Template | File | Version |
+|---|---|---|
+| `Maven_Test_Step` | `harness/maven-step-template.yaml` | 1.0 |
+| `Docker_Build_and_Push` | `harness/step-template-docker-push.yaml` | 1.0 |
 
-### Infrastructure
+---
 
-- **Environment**: `production`
-- **Infrastructure**: Kubernetes (Direct) → namespace `harness-demo`
-- **Connector**: `k8s_delegate_connector`
+## Step 5: Pipeline
 
-### Canary strategy (in pipeline.yaml)
+1. Go to **Pipelines → + Create Pipeline → Import from YAML**
+2. Paste contents of `harness/pipeline.yaml`
+3. Set up the service (`harness_demo_service`) with:
+   - Manifest source: GitHub → `k8s/deployment.yaml` + `k8s/service.yaml`
+   - Artifact: DockerHub → `<your-username>/harness-demo:latest`
+4. Set up environment `production` with infrastructure pointing to `k8s_connector`, namespace `harness-demo`
 
+### CI Stage
 ```
-K8sCanaryDeploy (25%) → Approval Gate → K8sCanaryDelete → K8sRollingDeploy
+Clone repo (main) → Maven Build & Test → Docker Build & Push (:latest)
 ```
 
-On failure → automatic rollback via `K8sCanaryDelete` + `K8sRollingRollback`
+### CD Stage — Canary
+```
+Fetch K8s manifests → Canary Deploy (25%) → Approval Gate → Canary Delete → Rolling Deploy (100%)
+```
 
-Apply the namespace before first run:
+Failure strategy: automatic rollback via `K8sCanaryDelete` + `K8sRollingRollback`
+
+---
+
+## Step 6: Run the Pipeline
+
+1. Click **Run** on the pipeline
+2. When it reaches the **Approval** step, click the step and approve to promote to full rollout
+3. Verify the deployment:
 
 ```bash
-kubectl apply -f k8s/namespace.yaml
+kubectl get pods -n harness-demo
+kubectl port-forward svc/harness-demo 8080:80 -n harness-demo
+curl http://localhost:8080/
 ```
 
 ---
 
-## Step 5: Bonus – Templatization
+## Templatization
 
-Two step templates are defined:
+Two steps are templatized to demonstrate reuse and standardization:
 
-### `Maven_Test_Step` (v1.0)
-- Runs `mvn clean verify` inside a Maven container
-- Publishes JUnit test reports back to Harness
-- Referenced in the CI stage via `templateRef: Maven_Test_Step`
+**`Maven_Test_Step`** — runs `mvn clean verify` in a Maven container and publishes JUnit reports to Harness
 
-### `Docker_Build_and_Push` (v1.0)
-- Wraps the `BuildAndPushDockerRegistry` step
-- Accepts `connectorRef`, `repo`, and `tags` as runtime inputs
-- Referenced in the CI stage via `templateRef: Docker_Build_and_Push`
-
-To create templates in Harness:
-1. Go to **Account/Org/Project → Templates → + New Template → Step**
-2. Paste YAML from `harness/maven-step-template.yaml` or `harness/step-template-docker-push.yaml`
-3. Save and publish the version
+**`Docker_Build_and_Push`** — wraps the `BuildAndPushDockerRegistry` step with `connectorRef` and `repo` as runtime inputs (`<+input>`), making it reusable across different registries and repos
 
 ---
 
-## Running Locally (optional)
+## Running Locally
 
 ```bash
 cd app
 
-# Build
-mvn clean package -DskipTests
-
 # Run tests
 mvn test
+
+# Build
+mvn clean package -DskipTests
 
 # Build Docker image
 docker build -t harness-demo:local .
 
-# Run locally
+# Run
 docker run -p 8080:8080 harness-demo:local
 
 # Test
