@@ -8,7 +8,7 @@ COPY src ./src
 RUN mvn package -DskipTests -q
 
 # Run stage
-FROM eclipse-temurin:17-jre-alpine
+FROM eclipse-temurin:17-jre-jammy
 WORKDIR /app
 COPY --from=builder /app/target/harness-demo-1.0.0.jar app.jar
 EXPOSE 8080
