@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: harness-demo
-          image: <+artifact.image>
+          image: raphaelokere/harness-demo:latest
           ports:
             - containerPort: 8080
           env:
