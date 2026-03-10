@@ -79,7 +79,7 @@ pipeline:
                           spec:
                             connectorRef: dockerhub_connector
                             imagePath: <+pipeline.variables.dockerhub_username>/harness-demo
-                            tag: <+pipeline.sequenceId>
+                            tag: latest
                           type: DockerRegistry
 
           environment:
