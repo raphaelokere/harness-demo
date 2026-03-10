@@ -11,7 +11,7 @@ template:
       connectorRef: <+input>
       repo: <+input>
       tags:
-        - <+input>
+        - latest
       dockerfile: Dockerfile
       context: .
       caching: true
