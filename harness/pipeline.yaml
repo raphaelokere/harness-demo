@@ -130,7 +130,7 @@ pipeline:
                             minimumCount: 1
                             disallowPipelineExecutor: false
                             userGroups:
-                              - _project_all_users
+                              - account._account_all_users
 
               # Primary phase: full rollout
               - stepGroup:
